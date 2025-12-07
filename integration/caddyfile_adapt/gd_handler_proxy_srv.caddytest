@@ -1,0 +1,77 @@
+{
+	layer4 {
+		0.0.0.0:8080 {
+			route {
+				proxy {
+					lookup_srv _service._tcp.example.com
+				}
+			}
+		}
+		0.0.0.0:8081 {
+			route {
+				proxy {
+					lookup_srv {
+						service tenant
+						proto tcp
+						name service.consul
+						refresh 30s
+						resolvers 192.168.50.119:8500
+					}
+				}
+			}
+		}
+	}
+}
+----------
+{
+	"apps": {
+		"layer4": {
+			"servers": {
+				"srv0": {
+					"listen": [
+						"0.0.0.0:8080"
+					],
+					"routes": [
+						{
+							"handle": [
+								{
+									"dynamic_upstreams": {
+										"name": "_service._tcp.example.com",
+										"source": "srv"
+									},
+									"handler": "proxy"
+								}
+							]
+						}
+					]
+				},
+				"srv1": {
+					"listen": [
+						"0.0.0.0:8081"
+					],
+					"routes": [
+						{
+							"handle": [
+								{
+									"dynamic_upstreams": {
+										"name": "service.consul",
+										"proto": "tcp",
+										"refresh": 30000000000,
+										"resolver": {
+											"addresses": [
+												"192.168.50.119:8500"
+											]
+										},
+										"service": "tenant",
+										"source": "srv"
+									},
+									"handler": "proxy"
+								}
+							]
+						}
+					]
+				}
+			}
+		}
+	}
+}

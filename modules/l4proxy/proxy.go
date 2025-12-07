@@ -17,6 +17,7 @@ package l4proxy
 import (
 	"bytes"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -47,6 +48,11 @@ type Handler struct {
 	// Upstreams is the list of backends to proxy to.
 	Upstreams UpstreamPool `json:"upstreams,omitempty"`
 
+	// DynamicUpstreamsRaw configures a source of upstreams to proxy to,
+	// such as from SRV lookup. If this is set, static Upstreams are
+	// not used; but it is not an error to have both set.
+	DynamicUpstreamsRaw json.RawMessage `json:"dynamic_upstreams,omitempty" caddy:"namespace=layer4.proxy.upstreams inline_key=source"`
+
 	// Health checks update the status of backends, whether they are
 	// up or down. Down backends will not be proxied to.
 	HealthChecks *HealthChecks `json:"health_checks,omitempty"`
@@ -59,6 +65,7 @@ type Handler struct {
 	ProxyProtocol string `json:"proxy_protocol,omitempty"`
 
 	proxyProtocolVersion uint8
+	dynamicUpstreams     UpstreamSource
 
 	ctx    caddy.Context
 	logger *zap.Logger
@@ -86,6 +93,15 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 		h.LoadBalancing.SelectionPolicy = mod.(Selector)
 	}
 
+	// load dynamic upstreams module
+	if h.DynamicUpstreamsRaw != nil {
+		val, err := ctx.LoadModule(h, "DynamicUpstreamsRaw")
+		if err != nil {
+			return fmt.Errorf("loading dynamic upstreams module: %v", err)
+		}
+		h.dynamicUpstreams = val.(UpstreamSource)
+	}
+
 	repl := caddy.NewReplacer()
 	proxyProtocol := repl.ReplaceAll(h.ProxyProtocol, "")
 	if proxyProtocol == "v1" {
@@ -97,7 +113,7 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 	}
 
 	// prepare upstreams
-	if len(h.Upstreams) == 0 {
+	if len(h.Upstreams) == 0 && h.dynamicUpstreams == nil {
 		return fmt.Errorf("no upstreams defined")
 	}
 	for i, ups := range h.Upstreams {
@@ -158,9 +174,29 @@ func (h *Handler) Handle(down *layer4.Connection, _ layer4.Handler) error {
 	var upConns []net.Conn
 	var proxyErr error
 
+	// Get the list of upstreams to use
+	upstreams := h.Upstreams
+	if h.dynamicUpstreams != nil {
+		dynamicUpstreams, err := h.dynamicUpstreams.GetUpstreams(repl)
+		if err != nil {
+			return fmt.Errorf("getting dynamic upstreams: %w", err)
+		}
+		// Provision the dynamic upstreams
+		for i, ups := range dynamicUpstreams {
+			err := ups.provision(h.ctx, h)
+			if err != nil {
+				h.logger.Error("provisioning dynamic upstream",
+					zap.Int("index", i),
+					zap.Error(err))
+				continue
+			}
+		}
+		upstreams = dynamicUpstreams
+	}
+
 	for {
 		// choose an available upstream
-		upstream := h.LoadBalancing.SelectionPolicy.Select(h.Upstreams, down)
+		upstream := h.LoadBalancing.SelectionPolicy.Select(upstreams, down)
 		if upstream == nil {
 			if proxyErr == nil {
 				proxyErr = fmt.Errorf("no upstreams available")
@@ -657,6 +693,22 @@ func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				return err
 			}
 			h.Upstreams = append(h.Upstreams, u)
+		case "lookup_srv":
+			if h.DynamicUpstreamsRaw != nil {
+				return d.Errf("dynamic upstreams already specified")
+			}
+			srv := &SRVUpstreams{}
+			if err := srv.UnmarshalCaddyfile(d.NewFromNextSegment()); err != nil {
+				return err
+			}
+			// Encode the SRV upstreams as JSON
+			srvJSON := caddyconfig.JSON(srv, nil)
+			// Add the inline key for the module
+			moduleJSON, err := layer4.SetModuleNameInline("source", "srv", srvJSON)
+			if err != nil {
+				return d.Errf("encoding dynamic upstreams module: %v", err)
+			}
+			h.DynamicUpstreamsRaw = moduleJSON
 		default:
 			return d.ArgErr()
 		}

@@ -589,6 +589,96 @@ While only allowing connections from a specific network and requiring a username
 ```
 </details>
 
+## Dynamic upstream discovery with SRV records
+
+The proxy handler supports dynamic upstream discovery using DNS SRV records. This is useful for service discovery scenarios, such as when using Consul, etcd, or other service registries that support SRV records.
+
+<details>
+    <summary>Caddyfile</summary>
+
+```
+{
+    layer4 {
+        # Simple SRV lookup with full domain name
+        0.0.0.0:8080 {
+            route {
+                proxy {
+                    lookup_srv _service._tcp.example.com
+                }
+            }
+        }
+        
+        # SRV lookup with service components and custom resolver
+        0.0.0.0:8081 {
+            route {
+                proxy {
+                    lookup_srv {
+                        service tenant
+                        proto tcp
+                        name service.consul
+                        refresh 30s
+                        resolvers 192.168.50.119:8500
+                    }
+                }
+            }
+        }
+    }
+}
+```
+</details>
+<details>
+    <summary>JSON</summary>
+
+```json
+{
+	"apps": {
+		"layer4": {
+			"servers": {
+				"srv0": {
+					"listen": ["0.0.0.0:8080"],
+					"routes": [
+						{
+							"handle": [
+								{
+									"handler": "proxy",
+									"dynamic_upstreams": {
+										"source": "srv",
+										"name": "_service._tcp.example.com"
+									}
+								}
+							]
+						}
+					]
+				},
+				"srv1": {
+					"listen": ["0.0.0.0:8081"],
+					"routes": [
+						{
+							"handle": [
+								{
+									"handler": "proxy",
+									"dynamic_upstreams": {
+										"source": "srv",
+										"service": "tenant",
+										"proto": "tcp",
+										"name": "service.consul",
+										"refresh": 30000000000,
+										"resolver": {
+											"addresses": ["192.168.50.119:8500"]
+										}
+									}
+								}
+							]
+						}
+					]
+				}
+			}
+		}
+	}
+}
+```
+</details>
+
 ## Placeholders support
 
 Environment variables having `{$VAR}` syntax are supported in Caddyfile only. They are evaluated once at launch before Caddyfile is parsed.

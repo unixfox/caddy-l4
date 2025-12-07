@@ -1,3 +1,7 @@
 _gitignore/
 
 .idea/
+
+# Compiled binaries
+caddy
+/caddy

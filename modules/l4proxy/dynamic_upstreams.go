@@ -122,6 +122,9 @@ func (su *SRVUpstreams) Provision(ctx caddy.Context) error {
 		su.resolver = &net.Resolver{
 			PreferGo: true,
 			Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				// Use weak random for resolver selection - this is intentionally not
+				// cryptographically secure as it's only used for load distribution
+				// among resolvers, not for security-sensitive operations.
 				//nolint:gosec
 				addr := su.Resolver.netAddrs[weakrand.Intn(len(su.Resolver.netAddrs))]
 				return d.DialContext(ctx, addr.Network, addr.JoinHostPort(0))
@@ -204,6 +207,7 @@ func (su SRVUpstreams) GetUpstreams(repl *caddy.Replacer) ([]*Upstream, error) {
 	}
 
 	// before adding a new one to the cache (as opposed to replacing stale one), make room if cache is full
+	// Cache size limit of 100 is chosen to balance memory usage with lookup performance for typical deployments
 	if cached.freshness.IsZero() && len(srvs) >= 100 {
 		for randomKey := range srvs {
 			delete(srvs, randomKey)
@@ -391,7 +395,7 @@ func (u *UpstreamResolver) ParseAddresses() error {
 			return err
 		}
 		if addr.PortRangeSize() != 1 {
-			return fmt.Errorf("resolver address must have exactly one address; cannot call %v", addr)
+			return fmt.Errorf("resolver address must have exactly one port; got %v", addr)
 		}
 		u.netAddrs = append(u.netAddrs, addr)
 	}

@@ -181,7 +181,11 @@ func (h *Handler) Handle(down *layer4.Connection, _ layer4.Handler) error {
 		if err != nil {
 			return fmt.Errorf("getting dynamic upstreams: %w", err)
 		}
-		// Provision the dynamic upstreams
+		// Provision the dynamic upstreams. Note that this is called on every connection,
+		// but the overhead is minimal because:
+		// 1. GetUpstreams has its own caching mechanism (e.g., SRV lookup cache)
+		// 2. The global peers pool (peers.LoadOrStore) reuses existing peer structures
+		// 3. Only TLS config needs to be set up, which is lightweight
 		for i, ups := range dynamicUpstreams {
 			err := ups.provision(h.ctx, h)
 			if err != nil {
